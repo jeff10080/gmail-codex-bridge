@@ -12,6 +12,7 @@ class Settings:
     poll_interval_seconds: int = 60
     allowed_sender: str = "user@example.com"
     recipient: str = "user@example.com"
+    gmail_account: str = "bridge@example.com"
     max_parallel_threads: int = 4
     gmail_query: str = "in:inbox from:user@example.com"
     codex_working_directory: str | None = None

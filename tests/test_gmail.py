@@ -45,7 +45,7 @@ def test_mime_parse_and_threaded_send(tmp_path):
         b"data", maintype="application", subtype="octet-stream", filename="result.bin"
     )
     messages = Messages(_b64(msg.as_bytes()))
-    client = GoogleGmailClient(Service(messages), tmp_path)
+    client = GoogleGmailClient(Service(messages), tmp_path, "bridge@example.com")
     incoming = client.get_message("m1")
     assert incoming.sender == "user@example.com"
     assert incoming.body.strip() == "instruction"

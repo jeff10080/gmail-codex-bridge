@@ -1,8 +1,8 @@
 poll_interval_seconds = 60
 allowed_sender = "user@example.com"
 recipient = "user@example.com"
+gmail_account = "bridge@example.com"
 max_parallel_threads = 4
 gmail_query = "in:inbox from:user@example.com"
 codex_working_directory = "C:\\path\\to\\git-repository"
 log_level = "INFO"
-
