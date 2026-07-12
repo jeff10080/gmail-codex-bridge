@@ -41,12 +41,19 @@ def _unb64(value: str) -> bytes:
 
 
 class GoogleGmailClient:
-    def __init__(self, service, attachment_dir: Path):
+    def __init__(self, service, attachment_dir: Path, sender: str | None = None):
         self.service = service
         self.attachment_dir = attachment_dir
+        self.sender = sender
 
     @classmethod
-    def from_data_dir(cls, data_dir: Path, interactive: bool = False):
+    def from_data_dir(
+        cls,
+        data_dir: Path,
+        interactive: bool = False,
+        expected_account: str | None = None,
+        reauthorize: bool = False,
+    ):
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
@@ -54,6 +61,8 @@ class GoogleGmailClient:
 
         token_path = data_dir / "token.dpapi"
         credentials_path = data_dir / "credentials.json"
+        if reauthorize:
+            token_path.unlink(missing_ok=True)
         creds = None
         if token_path.exists():
             token_info = json.loads(unprotect(token_path.read_bytes()).decode("utf-8"))
@@ -67,10 +76,14 @@ class GoogleGmailClient:
                 raise FileNotFoundError(f"Identifiants OAuth absents: {credentials_path}")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
+        service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+        authenticated_account = service.users().getProfile(userId="me").execute()["emailAddress"]
+        if expected_account and authenticated_account.casefold() != expected_account.casefold():
+            raise RuntimeError(
+                f"Compte Gmail OAuth incorrect: {authenticated_account}; attendu: {expected_account}"
+            )
         token_path.write_bytes(protect(creds.to_json().encode("utf-8")))
-        return cls(
-            build("gmail", "v1", credentials=creds, cache_discovery=False), data_dir / "attachments"
-        )
+        return cls(service, data_dir / "attachments", authenticated_account)
 
     def list_candidate_ids(self, query: str) -> list[str]:
         result: list[str] = []
@@ -130,7 +143,7 @@ class GoogleGmailClient:
     ) -> SendResult:
         msg = EmailMessage()
         msg["To"] = recipient
-        msg["From"] = recipient
+        msg["From"] = self.sender or recipient
         msg["Subject"] = subject
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
