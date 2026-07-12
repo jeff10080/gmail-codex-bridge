@@ -93,6 +93,28 @@ def test_unknown_route_is_quarantined_without_codex(tmp_path):
         assert c.execute("SELECT count(*) FROM quarantine").fetchone()[0] == 1
 
 
+def test_routing_code_recovers_reply_moved_to_new_gmail_thread(tmp_path):
+    gmail = FakeGmail([incoming("m1", "new-gmail-thread", "Reply\nRouting: CX-111111")])
+    codex = FakeCodex()
+    service = make_service(tmp_path, gmail, codex)
+    service.db.add_route("original-gmail-thread", "c1", "CX-111111", "Report")
+    assert service.scan_once()["queued"] == 1
+    asyncio.run(service.drain())
+    assert codex.calls == [("c1", "Reply\nRouting: CX-111111")]
+    assert gmail.sent[0]["thread_id"] == "original-gmail-thread"
+
+
+def test_routing_code_requeues_previously_quarantined_message(tmp_path):
+    message = incoming("m1", "new-gmail-thread", "Reply\nRouting: CX-111111")
+    gmail = FakeGmail([message])
+    service = make_service(tmp_path, gmail)
+    assert service.scan_once()["quarantined"] == 1
+    service.db.add_route("original-gmail-thread", "c1", "CX-111111", "Report")
+    assert service.scan_once()["queued"] == 1
+    with service.db.connection() as c:
+        assert c.execute("SELECT count(*) FROM quarantine").fetchone()[0] == 0
+
+
 def test_fifo_within_thread_and_parallel_across_threads(tmp_path):
     codex = FakeCodex(delay=0.02)
     gmail = FakeGmail(

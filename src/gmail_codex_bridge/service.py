@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import secrets
 
 from .codex import CodexClient
@@ -11,6 +12,7 @@ from .gmail import GmailClient
 from .models import OutgoingReport
 
 log = logging.getLogger(__name__)
+ROUTING_CODE_RE = re.compile(r"\bCX-[A-F0-9]{6}\b", re.IGNORECASE)
 
 
 class BridgeService:
@@ -39,7 +41,9 @@ class BridgeService:
                 counts["rejected"] += 1
                 log.warning("gmail_rejected id=%s sender_mismatch=true", message.id)
                 continue
-            state = self.db.enqueue(message.id, message.thread_id, message.body)
+            routing_match = ROUTING_CODE_RE.search(f"{message.subject}\n{message.body}")
+            routing_code = routing_match.group(0).upper() if routing_match else None
+            state = self.db.enqueue(message.id, message.thread_id, message.body, routing_code)
             counts[state] += 1
             log.info(
                 "gmail_ingested id=%s thread=%s state=%s", message.id, message.thread_id, state
