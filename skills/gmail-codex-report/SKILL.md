@@ -5,7 +5,7 @@ description: Publie automatiquement la reponse finale ou son rapport distinct da
 
 # Gmail Codex Report
 
-Quand une automatisation autorise l'envoi de fin de tour, publier sans nouvelle confirmation vers `user@example.com` avec `gmail-codex-bridge publish`.
+Quand une automatisation autorise l'envoi de fin de tour, publier sans nouvelle confirmation vers le destinataire defini dans la configuration privee avec `gmail-codex-bridge publish`.
 
 1. S'il existe un rapport distinct, envoyer seulement ce rapport; sinon envoyer toute la reponse finale.
 2. Utiliser le thread ID Codex courant.
@@ -18,4 +18,3 @@ Commande :
 ```powershell
 gmail-codex-bridge publish --codex-thread-id THREAD_ID --subject "Rapport Codex" --body-file PATH --attachment PATH
 ```
-

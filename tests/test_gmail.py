@@ -37,7 +37,7 @@ class Service:
 
 def test_mime_parse_and_threaded_send(tmp_path):
     msg = EmailMessage()
-    msg["From"] = "Stan <user@example.com>"
+    msg["From"] = "User <user@example.com>"
     msg["Subject"] = "Re: Report"
     msg["Message-ID"] = "<m1@gmail>"
     msg.set_content("instruction")
