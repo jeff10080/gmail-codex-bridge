@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import secrets
+
+from .codex import CodexClient
+from .database import Database
+from .gmail import GmailClient
+from .models import OutgoingReport
+
+log = logging.getLogger(__name__)
+
+
+class BridgeService:
+    def __init__(
+        self,
+        db: Database,
+        gmail: GmailClient,
+        codex: CodexClient,
+        *,
+        allowed_sender: str,
+        recipient: str,
+        gmail_query: str,
+        max_parallel_threads: int = 4,
+    ):
+        self.db, self.gmail, self.codex = db, gmail, codex
+        self.allowed_sender = allowed_sender.casefold()
+        self.recipient, self.gmail_query = recipient, gmail_query
+        self.limit = asyncio.Semaphore(max_parallel_threads)
+        self._thread_locks: dict[str, asyncio.Lock] = {}
+
+    def scan_once(self) -> dict[str, int]:
+        counts = {"queued": 0, "duplicate": 0, "quarantined": 0, "rejected": 0}
+        for message_id in self.gmail.list_candidate_ids(self.gmail_query):
+            message = self.gmail.get_message(message_id)
+            if message.sender.casefold() != self.allowed_sender:
+                counts["rejected"] += 1
+                log.warning("gmail_rejected id=%s sender_mismatch=true", message.id)
+                continue
+            state = self.db.enqueue(message.id, message.thread_id, message.body)
+            counts[state] += 1
+            log.info(
+                "gmail_ingested id=%s thread=%s state=%s", message.id, message.thread_id, state
+            )
+        return counts
+
+    async def drain(self) -> None:
+        tasks = [asyncio.create_task(self._drain_thread(t)) for t in self.db.ready_threads()]
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def _drain_thread(self, thread_id: str) -> None:
+        lock = self._thread_locks.setdefault(thread_id, asyncio.Lock())
+        async with self.limit, lock:
+            while row := self.db.claim_next(thread_id):
+                try:
+                    result = await self.codex.resume(thread_id, row["body"])
+                    await asyncio.to_thread(
+                        self.publish,
+                        OutgoingReport(thread_id, "", result.final_response, result.attachments),
+                        f"reply:{row['gmail_message_id']}",
+                    )
+                    self.db.finish(row["gmail_message_id"])
+                except Exception as exc:
+                    self.db.finish(row["gmail_message_id"], str(exc)[:1000])
+                    log.exception(
+                        "job_failed gmail_id=%s codex_thread=%s", row["gmail_message_id"], thread_id
+                    )
+                    break
+
+    def publish(self, report: OutgoingReport, dedupe_key: str | None = None):
+        route = self.db.route_for_codex(report.codex_thread_id)
+        code = report.routing_code or (
+            route["routing_code"] if route else f"CX-{secrets.token_hex(3).upper()}"
+        )
+        subject = route["subject"] if route else (report.subject or f"Rapport Codex [{code}]")
+        body = f"{report.body.rstrip()}\n\n---\nRouting: {code}\n"
+        existing = tuple(p for p in report.attachments if p.is_file())
+        missing = [str(p) for p in report.attachments if not p.is_file()]
+        if missing:
+            body += (
+                "\nPiece(s) jointe(s) introuvable(s):\n"
+                + "\n".join(f"- {p}" for p in missing)
+                + "\n"
+            )
+        key = dedupe_key or hashlib.sha256((report.codex_thread_id + body).encode()).hexdigest()
+        with self.db.connection() as c:
+            try:
+                c.execute(
+                    "INSERT INTO outbox(dedupe_key,codex_thread_id,state) VALUES(?,?,'sending')",
+                    (key, report.codex_thread_id),
+                )
+            except Exception:
+                row = c.execute("SELECT * FROM outbox WHERE dedupe_key=?", (key,)).fetchone()
+                if row and row["state"] == "sent":
+                    return row
+                raise
+        try:
+            sent = self.gmail.send(
+                recipient=self.recipient,
+                subject=subject,
+                body=body,
+                attachments=existing,
+                thread_id=route["gmail_thread_id"] if route else None,
+                in_reply_to=route["last_message_id_header"] if route else None,
+            )
+        except Exception as exc:
+            with self.db.connection() as c:
+                c.execute(
+                    "UPDATE outbox SET state='uncertain',error=? WHERE dedupe_key=?",
+                    (str(exc)[:1000], key),
+                )
+            raise
+        self.db.add_route(
+            sent.thread_id, report.codex_thread_id, code, subject, sent.message_id_header
+        )
+        with self.db.connection() as c:
+            c.execute(
+                "UPDATE outbox SET state='sent',gmail_message_id=?,gmail_thread_id=? WHERE dedupe_key=?",
+                (sent.message_id, sent.thread_id, key),
+            )
+        return sent
+
+    async def run_forever(self, interval: int) -> None:
+        self.db.reset_interrupted()
+        while True:
+            try:
+                self.scan_once()
+                await self.drain()
+            except Exception:
+                log.exception("poll_cycle_failed")
+            await asyncio.sleep(interval)
