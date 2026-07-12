@@ -94,14 +94,37 @@ class Database:
                 "SELECT * FROM routes WHERE codex_thread_id=?", (thread_id,)
             ).fetchone()
 
-    def enqueue(self, message_id: str, gmail_thread_id: str, body: str) -> str:
+    def route_for_code(self, routing_code: str):
+        with self.connection() as c:
+            return c.execute(
+                "SELECT * FROM routes WHERE routing_code=?", (routing_code.upper(),)
+            ).fetchone()
+
+    def enqueue(
+        self,
+        message_id: str,
+        gmail_thread_id: str,
+        body: str,
+        routing_code: str | None = None,
+    ) -> str:
         route = self.route_for_gmail(gmail_thread_id)
+        if not route and routing_code:
+            route = self.route_for_code(routing_code)
         with self.connection() as c:
             c.execute("BEGIN IMMEDIATE")
             exists = c.execute(
                 "SELECT state FROM inbox WHERE gmail_message_id=?", (message_id,)
             ).fetchone()
             if exists:
+                if exists["state"] == "quarantined" and route:
+                    c.execute(
+                        """UPDATE inbox SET codex_thread_id=?,state='queued',updated_at=CURRENT_TIMESTAMP
+                           WHERE gmail_message_id=?""",
+                        (route["codex_thread_id"], message_id),
+                    )
+                    c.execute("DELETE FROM quarantine WHERE gmail_message_id=?", (message_id,))
+                    c.commit()
+                    return "queued"
                 c.commit()
                 return "duplicate"
             if not route:

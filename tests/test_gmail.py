@@ -1,6 +1,6 @@
 from email.message import EmailMessage
 
-from gmail_codex_bridge.gmail import GoogleGmailClient, _b64
+from gmail_codex_bridge.gmail import GoogleGmailClient, _b64, extract_latest_reply
 
 
 class Request:
@@ -58,3 +58,29 @@ def test_mime_parse_and_threaded_send(tmp_path):
         in_reply_to="<m1@gmail>",
     )
     assert messages.last_send["threadId"] == "g1"
+
+
+def test_extract_latest_reply_from_french_gmail_quote():
+    body = """Une interface homme/machine
+
+Le dim. 12 juil. 2026 à 22:33, Stanislas <bridge@example.com> a
+écrit :
+
+> Quel projet aimerais-tu construire ?
+> Routing: CX-123456
+"""
+    assert extract_latest_reply(body) == "Une interface homme/machine"
+
+
+def test_extract_latest_reply_from_english_gmail_quote():
+    body = """A wearable interface.
+
+On Sun, Jul 12, 2026 at 10:33 PM Codex <bridge@example.com> wrote:
+> What would you build?
+"""
+    assert extract_latest_reply(body) == "A wearable interface."
+
+
+def test_extract_latest_reply_preserves_multiline_message():
+    body = "First paragraph.\n\nSecond paragraph."
+    assert extract_latest_reply(body) == body

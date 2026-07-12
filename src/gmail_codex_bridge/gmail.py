@@ -5,8 +5,9 @@ import email
 import json
 import logging
 import mimetypes
+import re
 from email.message import EmailMessage
-from email.utils import parseaddr
+from email.utils import make_msgid, parseaddr
 from pathlib import Path
 from typing import Protocol
 
@@ -38,6 +39,34 @@ def _b64(data: bytes) -> str:
 
 def _unb64(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+_GMAIL_QUOTE_END_RE = re.compile(r"(?:a écrit\s*:|wrote\s*:)", re.IGNORECASE)
+_OUTLOOK_SEPARATOR_RE = re.compile(
+    r"^\s*(?:-{2,}\s*(?:Original Message|Message d'origine)\s*-{2,}|_{5,})\s*$",
+    re.IGNORECASE,
+)
+
+
+def extract_latest_reply(body: str) -> str:
+    """Return only the text written above the quoted email history."""
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.split("\n")
+    cut = len(lines)
+    for index, line in enumerate(lines):
+        if _OUTLOOK_SEPARATOR_RE.match(line):
+            cut = index
+            break
+        if re.match(r"^\s*(?:Le|On)\b", line, re.IGNORECASE):
+            header = " ".join(lines[index : index + 4])
+            if _GMAIL_QUOTE_END_RE.search(header):
+                cut = index
+                break
+        if line.lstrip().startswith(">"):
+            cut = index
+            break
+    reply = "\n".join(lines[:cut]).strip()
+    return reply or normalized.strip()
 
 
 class GoogleGmailClient:
@@ -111,9 +140,10 @@ class GoogleGmailClient:
         for part in parsed.walk():
             disposition = part.get_content_disposition()
             if part.get_content_type() == "text/plain" and disposition != "attachment" and not body:
-                body = part.get_payload(decode=True).decode(
+                decoded = part.get_payload(decode=True).decode(
                     part.get_content_charset() or "utf-8", errors="replace"
                 )
+                body = extract_latest_reply(decoded)
             if disposition == "attachment" and part.get_filename():
                 safe_name = Path(part.get_filename()).name
                 target_dir = self.attachment_dir / message_id
@@ -145,6 +175,7 @@ class GoogleGmailClient:
         msg["To"] = recipient
         msg["From"] = self.sender or recipient
         msg["Subject"] = subject
+        msg["Message-ID"] = make_msgid(domain=(self.sender or recipient).partition("@")[2] or None)
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
