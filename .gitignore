@@ -12,4 +12,8 @@ token.json
 *.sqlite3
 logs/
 attachments/
-
+node_modules/
+.pnpm-store/
+.mypy_cache/
+.ruff_cache/
+config.toml

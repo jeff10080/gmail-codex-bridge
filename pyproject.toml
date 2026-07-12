@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gmail-codex-bridge"
+version = "0.1.0"
+description = "Local Gmail to Codex thread bridge"
+requires-python = ">=3.11"
+dependencies = [
+  "google-api-python-client>=2.160",
+  "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.9"]
+
+[project.scripts]
+gmail-codex-bridge = "gmail_codex_bridge.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gmail_codex_bridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
