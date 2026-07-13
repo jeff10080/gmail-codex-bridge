@@ -5,4 +5,9 @@ gmail_account = "bridge@example.com"
 max_parallel_threads = 4
 gmail_query = "in:inbox from:user@example.com"
 codex_working_directory = "C:\\path\\to\\git-repository"
+default_project = "accueil"
 log_level = "INFO"
+
+[projects]
+accueil = "C:\\path\\to\\default-project"
+second-projet = "C:\\path\\to\\second-project"

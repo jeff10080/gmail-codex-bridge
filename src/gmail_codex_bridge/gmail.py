@@ -159,6 +159,7 @@ class GoogleGmailClient:
             body,
             parsed.get("Message-ID"),
             tuple(paths),
+            parseaddr(parsed.get("Delivered-To") or parsed.get("To", ""))[1].casefold(),
         )
 
     def send(

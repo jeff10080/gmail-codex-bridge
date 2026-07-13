@@ -38,6 +38,25 @@ Le `gmail_thread_id` reste la route principale. Chaque mail contient aussi un co
 
 Il ne faut pas réinjecter manuellement une réponse avec un outil d'envoi entre conversations Codex. L'application l'afficherait comme une délégation provenant d'une autre tâche. Le service utilise directement `resumeThread`, ce qui crée un véritable message utilisateur contenant uniquement le corps nettoyé du mail.
 
+## Commencer une conversation depuis Gmail
+
+Un nouveau fil envoyé à l'adresse du bridge crée une nouvelle tâche Codex. Le projet est choisi par l'adresse destinataire, à partir de `gmail_account` et du registre `[projects]` :
+
+- l'adresse définie par `gmail_account` utilise `default_project` ;
+- l'adresse avec un suffixe `+alias` utilise le projet portant cet alias dans `[projects]`.
+
+Gmail remet les adresses avec suffixe `+...` dans la même boîte. Chaque fil Gmail correspond à une seule tâche Codex. Une fois la tâche créée, sa route et son projet sont conservés dans SQLite : toutes les réponses suivantes reprennent cette tâche, même si le corps du mail ne mentionne plus le projet.
+
+Un alias absent de `[projects]` est mis en quarantaine et ne lance pas Codex. Cela évite qu'un message soit exécuté dans le mauvais dépôt. Les clés de projet doivent être simples et stables, par exemple `mon-projet`, `analyse-2026` ou `sans-projet`.
+
+```toml
+default_project = "projet-principal"
+
+[projects]
+projet-principal = "C:\\chemin\\vers\\projet-principal"
+second-projet = "C:\\chemin\\vers\\second-projet"
+```
+
 ## Limite d'affichage dans Codex sous Windows
 
 Une reprise effectuée avec `@openai/codex-sdk` est bien enregistrée dans la conversation et la réponse de l'agent est envoyée dans le fil Gmail. Toutefois, l'application Codex déjà ouverte ne détecte pas toujours le nouveau tour immédiatement. Il faut alors rouvrir la tâche ou recharger l'application pour le voir.
@@ -50,7 +69,7 @@ La solution prévue est de passer à un client `app-server` persistant lorsque C
 
 - SQLite assure le routage, la file FIFO, la quarantaine et l'idempotence par identifiant Gmail.
 - Un seul tour est exécuté à la fois par conversation. Des conversations différentes peuvent progresser en parallèle.
-- Un message sans route connue est mis en quarantaine et ne lance jamais Codex.
+- Un message sans route connue crée une tâche seulement si son adresse correspond à un projet configuré ; sinon il est mis en quarantaine.
 - Après une coupure, la requête Gmail retrouve les messages non traités, puis SQLite les déduplique.
 - Un envoi dont l'issue est incertaine passe à l'état `uncertain` et n'est jamais retenté automatiquement.
 - Les journaux contiennent uniquement les identifiants, les états et les erreurs, jamais le corps complet des emails.

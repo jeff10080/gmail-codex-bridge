@@ -10,7 +10,10 @@ from .models import CodexResult
 
 
 class CodexClient(Protocol):
-    async def resume(self, thread_id: str, prompt: str) -> CodexResult: ...
+    async def start(self, prompt: str, working_directory: str | None = None) -> CodexResult: ...
+    async def resume(
+        self, thread_id: str, prompt: str, working_directory: str | None = None
+    ) -> CodexResult: ...
 
 
 def find_node_executable() -> str:
@@ -40,7 +43,13 @@ class NodeCodexClient:
         self.working_directory = working_directory
         self.node_executable = find_node_executable()
 
-    async def resume(self, thread_id: str, prompt: str) -> CodexResult:
+    async def _run(
+        self,
+        prompt: str,
+        *,
+        thread_id: str | None = None,
+        working_directory: str | None = None,
+    ) -> CodexResult:
         proc = await asyncio.create_subprocess_exec(
             self.node_executable,
             str(self.runner),
@@ -53,7 +62,7 @@ class NodeCodexClient:
                 {
                     "threadId": thread_id,
                     "prompt": prompt,
-                    "workingDirectory": self.working_directory,
+                    "workingDirectory": working_directory or self.working_directory,
                 }
             )
             + "\n"
@@ -67,4 +76,14 @@ class NodeCodexClient:
         data = json.loads(line)
         if not data.get("ok"):
             raise RuntimeError(data.get("error", "Codex runner failed"))
-        return CodexResult(data["finalResponse"])
+        return CodexResult(data["finalResponse"], thread_id=data.get("threadId"))
+
+    async def start(self, prompt: str, working_directory: str | None = None) -> CodexResult:
+        return await self._run(prompt, working_directory=working_directory)
+
+    async def resume(
+        self, thread_id: str, prompt: str, working_directory: str | None = None
+    ) -> CodexResult:
+        return await self._run(
+            prompt, thread_id=thread_id, working_directory=working_directory
+        )
