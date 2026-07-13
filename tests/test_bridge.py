@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -37,17 +38,28 @@ class FakeCodex:
         self.delay = delay
         self.active = 0
         self.max_active = 0
+        self.started = []
+        self.working_directories = []
 
-    async def resume(self, thread_id, prompt):
+    async def start(self, prompt, working_directory=None):
+        self.started.append(prompt)
+        await self._record("created-1", prompt, working_directory)
+        return CodexResult(f"answer:{prompt}", thread_id="created-1")
+
+    async def resume(self, thread_id, prompt, working_directory=None):
+        await self._record(thread_id, prompt, working_directory)
+        return CodexResult(f"answer:{prompt}", thread_id=thread_id)
+
+    async def _record(self, thread_id, prompt, working_directory):
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         await asyncio.sleep(self.delay)
         self.calls.append((thread_id, prompt))
+        self.working_directories.append(working_directory)
         self.active -= 1
-        return CodexResult(f"answer:{prompt}")
 
 
-def make_service(tmp_path, gmail=None, codex=None):
+def make_service(tmp_path, gmail=None, codex=None, **kwargs):
     return BridgeService(
         Database(tmp_path / "db.sqlite3"),
         gmail or FakeGmail(),
@@ -56,11 +68,14 @@ def make_service(tmp_path, gmail=None, codex=None):
         recipient="user@example.com",
         gmail_query="from:user@example.com",
         max_parallel_threads=4,
+        **kwargs,
     )
 
 
-def incoming(mid, thread, body="hello", sender="user@example.com"):
-    return IncomingMessage(mid, thread, sender, "Re: report", body, f"<{mid}@gmail>")
+def incoming(mid, thread, body="hello", sender="user@example.com", recipient=""):
+    return IncomingMessage(
+        mid, thread, sender, "Re: report", body, f"<{mid}@gmail>", recipient=recipient
+    )
 
 
 def test_first_report_creates_route_and_successive_report_replies(tmp_path):
@@ -91,6 +106,69 @@ def test_unknown_route_is_quarantined_without_codex(tmp_path):
     assert codex.calls == []
     with service.db.connection() as c:
         assert c.execute("SELECT count(*) FROM quarantine").fetchone()[0] == 1
+
+
+def test_new_email_starts_thread_in_project_selected_by_plus_alias(tmp_path):
+    message = incoming(
+        "m1",
+        "g1",
+        "Nouvelle demande",
+        recipient="agent+project-a@example.com",
+    )
+    gmail, codex = FakeGmail([message]), FakeCodex()
+    service = make_service(
+        tmp_path,
+        gmail,
+        codex,
+        gmail_account="agent@example.com",
+        default_project="bridge",
+        projects={"bridge": "C:/bridge", "project-a": "C:/project-a"},
+    )
+
+    assert service.scan_once()["queued"] == 1
+    asyncio.run(service.drain())
+
+    assert codex.started == ["Nouvelle demande"]
+    assert codex.working_directories == ["C:/project-a"]
+    route = service.db.route_for_gmail("g1")
+    assert route["codex_thread_id"] == "created-1"
+    assert route["project_key"] == "project-a"
+    assert gmail.sent[0]["thread_id"] == "g1"
+    assert gmail.sent[0]["in_reply_to"] == "<m1@gmail>"
+
+
+def test_new_email_to_plain_address_uses_default_project(tmp_path):
+    message = incoming("m1", "g1", recipient="agent@example.com")
+    gmail, codex = FakeGmail([message]), FakeCodex()
+    service = make_service(
+        tmp_path,
+        gmail,
+        codex,
+        gmail_account="agent@example.com",
+        default_project="bridge",
+        projects={"bridge": "C:/bridge"},
+    )
+
+    service.scan_once()
+    asyncio.run(service.drain())
+
+    assert codex.working_directories == ["C:/bridge"]
+
+
+def test_unknown_project_alias_is_quarantined(tmp_path):
+    message = incoming(
+        "m1", "g1", recipient="agent+unknown@example.com"
+    )
+    service = make_service(
+        tmp_path,
+        FakeGmail([message]),
+        FakeCodex(),
+        gmail_account="agent@example.com",
+        default_project="bridge",
+        projects={"bridge": "C:/bridge"},
+    )
+
+    assert service.scan_once()["quarantined"] == 1
 
 
 def test_routing_code_recovers_reply_moved_to_new_gmail_thread(tmp_path):
@@ -162,3 +240,29 @@ def test_restart_requeues_interrupted_job(tmp_path):
     assert service.db.claim_next("c1")["gmail_message_id"] == "m1"
     service.db.reset_interrupted()
     assert service.db.claim_next("c1")["gmail_message_id"] == "m1"
+
+
+def test_existing_database_is_migrated_for_project_routing(tmp_path):
+    path = tmp_path / "db.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE routes (
+              gmail_thread_id TEXT PRIMARY KEY, codex_thread_id TEXT NOT NULL UNIQUE,
+              routing_code TEXT NOT NULL UNIQUE, subject TEXT NOT NULL,
+              last_message_id_header TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE inbox (
+              gmail_message_id TEXT PRIMARY KEY, gmail_thread_id TEXT NOT NULL,
+              codex_thread_id TEXT, body TEXT NOT NULL, state TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0, error TEXT,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+    database = Database(path)
+    database.add_route("g1", "c1", "CX-111111", "Sujet", project_key="bridge")
+
+    assert database.route_for_gmail("g1")["project_key"] == "bridge"

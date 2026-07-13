@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -16,6 +16,8 @@ class Settings:
     max_parallel_threads: int = 4
     gmail_query: str = "in:inbox from:user@example.com"
     codex_working_directory: str | None = None
+    default_project: str | None = None
+    projects: dict[str, str] = field(default_factory=dict)
     log_level: str = "INFO"
 
     @property

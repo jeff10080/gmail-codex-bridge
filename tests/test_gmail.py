@@ -38,6 +38,7 @@ class Service:
 def test_mime_parse_and_threaded_send(tmp_path):
     msg = EmailMessage()
     msg["From"] = "User <user@example.com>"
+    msg["To"] = "bridge@example.com"
     msg["Subject"] = "Re: Report"
     msg["Message-ID"] = "<m1@gmail>"
     msg.set_content("instruction")
@@ -49,6 +50,7 @@ def test_mime_parse_and_threaded_send(tmp_path):
     incoming = client.get_message("m1")
     assert incoming.sender == "user@example.com"
     assert incoming.body.strip() == "instruction"
+    assert incoming.recipient == "bridge@example.com"
     assert incoming.attachments[0].read_bytes() == b"data"
     client.send(
         recipient="user@example.com",
