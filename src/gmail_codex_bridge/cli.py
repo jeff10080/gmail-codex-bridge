@@ -44,6 +44,9 @@ def build_service(settings, interactive: bool = False) -> BridgeService:
         recipient=settings.recipient,
         gmail_query=settings.gmail_query,
         max_parallel_threads=settings.max_parallel_threads,
+        gmail_account=settings.gmail_account,
+        default_project=settings.default_project,
+        projects=settings.projects,
     )
 
 

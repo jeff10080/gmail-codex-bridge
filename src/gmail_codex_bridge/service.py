@@ -26,12 +26,34 @@ class BridgeService:
         recipient: str,
         gmail_query: str,
         max_parallel_threads: int = 4,
+        gmail_account: str = "",
+        default_project: str | None = None,
+        projects: dict[str, str] | None = None,
     ):
         self.db, self.gmail, self.codex = db, gmail, codex
         self.allowed_sender = allowed_sender.casefold()
         self.recipient, self.gmail_query = recipient, gmail_query
+        self.gmail_account = gmail_account.casefold()
+        self.default_project = default_project.casefold() if default_project else None
+        self.projects = {key.casefold(): value for key, value in (projects or {}).items()}
         self.limit = asyncio.Semaphore(max_parallel_threads)
         self._thread_locks: dict[str, asyncio.Lock] = {}
+
+    def _project_for_recipient(self, recipient: str) -> str | None:
+        if not self.gmail_account:
+            return None
+        target = recipient.casefold() or self.gmail_account
+        target_local, separator, target_domain = target.partition("@")
+        account_local, _, account_domain = self.gmail_account.partition("@")
+        if not separator or target_domain != account_domain:
+            return None
+        if target_local == account_local:
+            return self.default_project if self.default_project in self.projects else None
+        prefix = f"{account_local}+"
+        if not target_local.startswith(prefix):
+            return None
+        project_key = target_local.removeprefix(prefix)
+        return project_key if project_key in self.projects else None
 
     def scan_once(self) -> dict[str, int]:
         counts = {"queued": 0, "duplicate": 0, "quarantined": 0, "rejected": 0}
@@ -43,7 +65,16 @@ class BridgeService:
                 continue
             routing_match = ROUTING_CODE_RE.search(f"{message.subject}\n{message.body}")
             routing_code = routing_match.group(0).upper() if routing_match else None
-            state = self.db.enqueue(message.id, message.thread_id, message.body, routing_code)
+            project_key = self._project_for_recipient(message.recipient)
+            state = self.db.enqueue(
+                message.id,
+                message.thread_id,
+                message.body,
+                routing_code,
+                project_key=project_key,
+                subject=message.subject,
+                message_id_header=message.message_id_header,
+            )
             counts[state] += 1
             log.info(
                 "gmail_ingested id=%s thread=%s state=%s", message.id, message.thread_id, state
@@ -55,15 +86,50 @@ class BridgeService:
         if tasks:
             await asyncio.gather(*tasks)
 
-    async def _drain_thread(self, thread_id: str) -> None:
-        lock = self._thread_locks.setdefault(thread_id, asyncio.Lock())
+    async def _drain_thread(self, work_id: str) -> None:
+        lock = self._thread_locks.setdefault(work_id, asyncio.Lock())
         async with self.limit, lock:
+            thread_id = work_id
             while row := self.db.claim_next(thread_id):
                 try:
-                    result = await self.codex.resume(thread_id, row["body"])
+                    if row["codex_thread_id"]:
+                        route = self.db.route_for_codex(row["codex_thread_id"])
+                        project_key = route["project_key"] if route else row["project_key"]
+                        working_directory = self.projects.get(project_key or "")
+                        result = await self.codex.resume(
+                            row["codex_thread_id"], row["body"], working_directory
+                        )
+                        active_thread_id = row["codex_thread_id"]
+                    else:
+                        project_key = row["project_key"]
+                        working_directory = self.projects.get(project_key or "")
+                        if not working_directory:
+                            raise RuntimeError(f"Projet Codex inconnu: {project_key!r}")
+                        result = await self.codex.start(
+                            row["body"],
+                            working_directory,
+                            title=row["subject"] or "Conversation Gmail",
+                        )
+                        if not result.thread_id:
+                            raise RuntimeError("Codex app-server n'a pas retourne de thread ID")
+                        active_thread_id = result.thread_id
+                        code = f"CX-{secrets.token_hex(3).upper()}"
+                        subject = row["subject"] or f"Conversation Codex [{code}]"
+                        self.db.add_route(
+                            row["gmail_thread_id"],
+                            active_thread_id,
+                            code,
+                            subject,
+                            row["message_id_header"],
+                            project_key,
+                        )
+                        self.db.bind_gmail_thread(row["gmail_thread_id"], active_thread_id)
+                        thread_id = active_thread_id
                     await asyncio.to_thread(
                         self.publish,
-                        OutgoingReport(thread_id, "", result.final_response, result.attachments),
+                        OutgoingReport(
+                            active_thread_id, "", result.final_response, result.attachments
+                        ),
                         f"reply:{row['gmail_message_id']}",
                     )
                     self.db.finish(row["gmail_message_id"])

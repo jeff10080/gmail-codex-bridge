@@ -13,6 +13,7 @@ class IncomingMessage:
     body: str
     message_id_header: str | None = None
     attachments: tuple[Path, ...] = ()
+    recipient: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,3 +36,4 @@ class SendResult:
 class CodexResult:
     final_response: str
     attachments: tuple[Path, ...] = field(default_factory=tuple)
+    thread_id: str | None = None

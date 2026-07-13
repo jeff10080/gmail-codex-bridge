@@ -1,6 +1,5 @@
 {
   "name": "gmail-codex-bridge-runner",
   "private": true,
-  "type": "module",
-  "dependencies": { "@openai/codex-sdk": "^0.144.0" }
+  "type": "module"
 }

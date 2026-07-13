@@ -4,11 +4,11 @@ Service local Windows reliant un fil Gmail à une conversation Codex, sans appel
 
 ## Etat
 
-La version locale fonctionne avec Gmail et le SDK Codex. Le consentement OAuth Gmail initial et l'installation de la tâche planifiée Windows restent interactifs.
+La version locale fonctionne avec Gmail et le serveur local de Codex (`codex app-server`). Le consentement OAuth Gmail initial et l'installation de la tâche planifiée Windows restent interactifs.
 
 ## Installation rapide
 
-Prérequis : Python 3.11+, Node.js 18+, Codex CLI connecte, projet Google Cloud avec Gmail API active et identifiants OAuth « application de bureau ».
+Prérequis : Python 3.11+, Node.js 18+, Codex Desktop installé et connecté (ou un exécutable `codex` compatible dans `PATH`, avec la commande `app-server`), projet Google Cloud avec Gmail API active et identifiants OAuth « application de bureau ». Le flux a été validé avec Codex CLI 0.144.3 ; `app-server` restant expérimental, une mise à jour future de Codex doit être suivie du test court décrit ci-dessous.
 
 ```powershell
 .\scripts\install.ps1
@@ -32,25 +32,46 @@ Un mail auquel l'utilisateur doit pouvoir répondre doit toujours passer par cet
 
 ## Traitement des réponses Gmail
 
-Le bridge extrait seulement le nouveau texte écrit au-dessus de l'historique cité par Gmail ou Outlook. Ce texte est transmis tel quel au SDK Codex. Aucun préfixe du type « réponse reçue par email », aucune consigne technique et aucun historique du fil ne sont ajoutés à la conversation.
+Le bridge extrait seulement le nouveau texte écrit au-dessus de l'historique cité par Gmail ou Outlook. Ce texte est transmis tel quel à Codex par `app-server`. Aucun préfixe du type « réponse reçue par email », aucune consigne technique et aucun historique du fil ne sont ajoutés à la conversation.
 
 Le `gmail_thread_id` reste la route principale. Chaque mail contient aussi un code `CX-XXXXXX`. Si Gmail place une réponse dans un nouveau fil, ce code permet de retrouver la route et de récupérer un message déjà mis en quarantaine. Les mails sortants possèdent leur propre en-tête `Message-ID` afin de rendre le suivi du fil plus fiable.
 
-Il ne faut pas réinjecter manuellement une réponse avec un outil d'envoi entre conversations Codex. L'application l'afficherait comme une délégation provenant d'une autre tâche. Le service utilise directement `resumeThread`, ce qui crée un véritable message utilisateur contenant uniquement le corps nettoyé du mail.
+Il ne faut pas réinjecter manuellement une réponse avec un outil d'envoi entre conversations Codex. L'application l'afficherait comme une délégation provenant d'une autre tâche. Le service utilise directement `thread/resume` puis `turn/start`, ce qui crée un véritable message utilisateur contenant uniquement le corps nettoyé du mail.
 
-## Limite d'affichage dans Codex sous Windows
+## Commencer une conversation depuis Gmail
 
-Une reprise effectuée avec `@openai/codex-sdk` est bien enregistrée dans la conversation et la réponse de l'agent est envoyée dans le fil Gmail. Toutefois, l'application Codex déjà ouverte ne détecte pas toujours le nouveau tour immédiatement. Il faut alors rouvrir la tâche ou recharger l'application pour le voir.
+Un nouveau fil envoyé à l'adresse du bridge crée une nouvelle tâche Codex. Le projet est choisi par l'adresse destinataire, à partir de `gmail_account` et du registre `[projects]` :
 
-Cette limite concerne uniquement le rafraîchissement de l'interface. Le message n'est pas perdu et son contenu n'est pas modifié. Le SDK lance actuellement un processus `codex exec` séparé de l'application. Sous Windows, aucune API publique ne permet au bridge de rejoindre le serveur de l'application ou de lui demander de recharger une conversation. Modifier les index internes de Codex, simuler une touche de rafraîchissement ou redémarrer automatiquement l'application serait trop fragile.
+- l'adresse définie par `gmail_account` utilise `default_project` ;
+- l'adresse avec un suffixe `+alias` utilise le projet portant cet alias dans `[projects]`.
 
-La solution prévue est de passer à un client `app-server` persistant lorsque Codex proposera un point de connexion partagé et documenté sous Windows. Le runner SDK actuel restera alors disponible comme solution de repli.
+Gmail remet les adresses avec suffixe `+...` dans la même boîte. Chaque fil Gmail correspond à une seule tâche Codex. Une fois la tâche créée, sa route et son projet sont conservés dans SQLite : toutes les réponses suivantes reprennent cette tâche, même si le corps du mail ne mentionne plus le projet.
+
+La nouvelle tâche est créée dans le stockage Codex utilisé par l'application, puis nommée d'après le sujet du mail (ou `Conversation Gmail` si le sujet est vide). Elle apparaît ainsi dans la liste des tâches de Codex Desktop et peut être ouverte puis poursuivie depuis l'application comme une tâche ordinaire.
+
+Un alias absent de `[projects]` est mis en quarantaine et ne lance pas Codex. Cela évite qu'un message soit exécuté dans le mauvais dépôt. Les clés de projet doivent être simples et stables, par exemple `mon-projet`, `analyse-2026` ou `sans-projet`.
+
+```toml
+default_project = "projet-principal"
+
+[projects]
+projet-principal = "C:\\chemin\\vers\\projet-principal"
+second-projet = "C:\\chemin\\vers\\second-projet"
+```
+
+## Affichage dans Codex sous Windows
+
+Le bridge passe par le protocole `app-server` du CLI fourni avec Codex Desktop. Contrairement à l'ancien runner `@openai/codex-sdk` fondé sur `codex exec`, une conversation commencée par email est créée comme une tâche nommée et visible dans l'application. Une réponse ultérieure reprend le même identifiant de tâche.
+
+Le bridge lance un processus `app-server` local pour chaque tour puis le ferme lorsque la réponse finale est disponible. Il ne modifie aucun index interne de Codex et ne pilote pas l'interface graphique. Si une tâche déjà ouverte ne montre pas immédiatement le dernier tour, la rouvrir suffit à relire l'état persistant.
+
+Le runner Node utilise uniquement la bibliothèque standard de Node.js : le projet n'a plus de dépendance npm à `@openai/codex-sdk` et l'installation ne lance plus `npm install`.
 
 ## Fonctionnement et garanties
 
 - SQLite assure le routage, la file FIFO, la quarantaine et l'idempotence par identifiant Gmail.
 - Un seul tour est exécuté à la fois par conversation. Des conversations différentes peuvent progresser en parallèle.
-- Un message sans route connue est mis en quarantaine et ne lance jamais Codex.
+- Un message sans route connue crée une tâche seulement si son adresse correspond à un projet configuré ; sinon il est mis en quarantaine.
 - Après une coupure, la requête Gmail retrouve les messages non traités, puis SQLite les déduplique.
 - Un envoi dont l'issue est incertaine passe à l'état `uncertain` et n'est jamais retenté automatiquement.
 - Les journaux contiennent uniquement les identifiants, les états et les erreurs, jamais le corps complet des emails.
@@ -61,6 +82,8 @@ Voir [docs/INSTALLATION.md](docs/INSTALLATION.md) et [docs/ARCHITECTURE.md](docs
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
+node --check scripts\codex-runner.mjs
+codex app-server --help
 ```
 
 Aucun test n'accède à Gmail ni à Codex.
