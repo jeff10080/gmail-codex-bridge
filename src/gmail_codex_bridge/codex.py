@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Protocol
 
@@ -37,6 +39,13 @@ def find_node_executable() -> str:
     )
 
 
+def subprocess_creation_flags() -> int:
+    """Prevent Node and the Codex CLI from opening a console window on Windows."""
+    if os.name == "nt":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
+
+
 class NodeCodexClient:
     def __init__(self, runner: Path, working_directory: str | None = None):
         self.runner = runner
@@ -56,6 +65,7 @@ class NodeCodexClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=subprocess_creation_flags(),
         )
         payload = (
             json.dumps(
