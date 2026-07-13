@@ -39,10 +39,12 @@ class FakeCodex:
         self.active = 0
         self.max_active = 0
         self.started = []
+        self.started_titles = []
         self.working_directories = []
 
-    async def start(self, prompt, working_directory=None):
+    async def start(self, prompt, working_directory=None, title=None):
         self.started.append(prompt)
+        self.started_titles.append(title)
         await self._record("created-1", prompt, working_directory)
         return CodexResult(f"answer:{prompt}", thread_id="created-1")
 
@@ -129,6 +131,7 @@ def test_new_email_starts_thread_in_project_selected_by_plus_alias(tmp_path):
     asyncio.run(service.drain())
 
     assert codex.started == ["Nouvelle demande"]
+    assert codex.started_titles == ["Re: report"]
     assert codex.working_directories == ["C:/project-a"]
     route = service.db.route_for_gmail("g1")
     assert route["codex_thread_id"] == "created-1"

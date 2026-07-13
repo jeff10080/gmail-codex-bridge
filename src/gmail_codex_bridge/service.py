@@ -105,9 +105,13 @@ class BridgeService:
                         working_directory = self.projects.get(project_key or "")
                         if not working_directory:
                             raise RuntimeError(f"Projet Codex inconnu: {project_key!r}")
-                        result = await self.codex.start(row["body"], working_directory)
+                        result = await self.codex.start(
+                            row["body"],
+                            working_directory,
+                            title=row["subject"] or "Conversation Gmail",
+                        )
                         if not result.thread_id:
-                            raise RuntimeError("Le SDK Codex n'a pas retourne de thread ID")
+                            raise RuntimeError("Codex app-server n'a pas retourne de thread ID")
                         active_thread_id = result.thread_id
                         code = f"CX-{secrets.token_hex(3).upper()}"
                         subject = row["subject"] or f"Conversation Codex [{code}]"
