@@ -1,5 +1,9 @@
 # Gmail Codex Bridge
 
+## Format des mails sortants
+
+Les mails sortants sont envoyes en multipart avec une partie `text/html` rendue depuis le Markdown du rapport et une partie `text/plain` de secours. Les clients qui affichent le HTML profitent de la mise en forme; les autres conservent un contenu lisible.
+
 Service local Windows reliant un fil Gmail à une conversation Codex, sans appel de modèle lors des scans vides.
 
 ## Etat

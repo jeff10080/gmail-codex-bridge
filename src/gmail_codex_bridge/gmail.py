@@ -27,6 +27,7 @@ class GmailClient(Protocol):
         recipient: str,
         subject: str,
         body: str,
+        html_body: str | None = None,
         attachments: tuple[Path, ...] = (),
         thread_id: str | None = None,
         in_reply_to: str | None = None,
@@ -168,6 +169,7 @@ class GoogleGmailClient:
         recipient: str,
         subject: str,
         body: str,
+        html_body: str | None = None,
         attachments: tuple[Path, ...] = (),
         thread_id: str | None = None,
         in_reply_to: str | None = None,
@@ -181,6 +183,8 @@ class GoogleGmailClient:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
         msg.set_content(body)
+        if html_body:
+            msg.add_alternative(html_body, subtype="html")
         for path in attachments:
             mime, _ = mimetypes.guess_type(path.name)
             major, minor = (mime or "application/octet-stream").split("/", 1)

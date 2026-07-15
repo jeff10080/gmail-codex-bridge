@@ -89,6 +89,7 @@ def test_first_report_creates_route_and_successive_report_replies(tmp_path):
     assert gmail.sent[1]["thread_id"] == "gmail-1"
     assert gmail.sent[1]["subject"] == "Report"
     assert gmail.sent[1]["in_reply_to"] == "<sent-1@local>"
+    assert "<p>two</p>" in gmail.sent[1]["html_body"]
 
 
 def test_scan_is_idempotent_and_rejects_wrong_sender(tmp_path):
@@ -222,6 +223,7 @@ def test_attachments_only_explicit_and_missing_is_reported(tmp_path):
     sent = gmail.sent[0]
     assert sent["attachments"] == (present,)
     assert str(missing) in sent["body"]
+    assert "Piece(s) jointe(s) introuvable(s)" in sent["html_body"]
 
 
 def test_uncertain_send_is_not_retried(tmp_path):

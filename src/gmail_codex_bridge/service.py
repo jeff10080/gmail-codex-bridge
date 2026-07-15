@@ -9,6 +9,7 @@ import secrets
 from .codex import CodexClient
 from .database import Database
 from .gmail import GmailClient
+from .html_email import markdown_to_html
 from .models import OutgoingReport
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,7 @@ class BridgeService:
                 recipient=self.recipient,
                 subject=subject,
                 body=body,
+                html_body=markdown_to_html(body),
                 attachments=existing,
                 thread_id=route["gmail_thread_id"] if route else None,
                 in_reply_to=route["last_message_id_header"] if route else None,

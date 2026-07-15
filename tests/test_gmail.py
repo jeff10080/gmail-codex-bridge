@@ -57,12 +57,17 @@ def test_mime_parse_and_threaded_send(tmp_path):
         recipient="user@example.com",
         subject="Report",
         body="answer",
+        html_body="<html><body><h1>answer</h1></body></html>",
         attachments=incoming.attachments,
         thread_id="g1",
         in_reply_to="<m1@gmail>",
     )
     assert messages.last_send["threadId"] == "g1"
     sent = email.message_from_bytes(_unb64(messages.last_send["raw"]))
+    html_part = next(part for part in sent.walk() if part.get_content_type() == "text/html")
+    assert html_part.get_payload(decode=True).decode().strip() == (
+        "<html><body><h1>answer</h1></body></html>"
+    )
     attachment = next(part for part in sent.walk() if part.get_content_disposition() == "attachment")
     assert attachment.get_filename() == "result.bin"
     assert attachment.get_payload(decode=True) == b"data"
