@@ -125,7 +125,6 @@ async function run(request) {
       await client.request("thread/resume", {
         threadId,
         cwd: request.workingDirectory || null,
-        excludeTurns: true,
       });
     } else {
       const started = await client.request("thread/start", {
