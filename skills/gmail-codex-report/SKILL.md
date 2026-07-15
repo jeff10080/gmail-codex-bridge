@@ -11,7 +11,7 @@ Quand une automatisation autorise l'envoi de fin de tour, publier sans nouvelle 
 
 1. S'il existe un rapport distinct, envoyer seulement ce rapport; sinon envoyer toute la reponse finale.
 2. Utiliser le thread ID Codex courant.
-3. Ne joindre que les fichiers explicitement cites ou lies dans la reponse finale. Ne jamais parcourir le projet pour en deviner.
+3. Pour joindre des fichiers a une reponse produite depuis Gmail, ajouter une section Markdown `## Pieces jointes` dans la reponse finale et y lister chaque fichier avec un lien local explicite. Le bridge extrait uniquement les liens de cette section. Ne jamais parcourir le projet pour en deviner.
 4. Passer tous les chemins explicites avec `--attachment`, y compris s'ils sont absents : le bridge signalera l'absence sans bloquer le rapport.
 5. Humaniser seulement si necessaire, sans modifier les faits.
 6. Ne jamais reinjecter une reponse Gmail avec un outil d'envoi entre conversations. Le service reprend lui-meme la conversation avec le SDK Codex et transmet uniquement le nouveau texte de l'utilisateur.

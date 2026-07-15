@@ -28,6 +28,8 @@ Le service scrute Gmail toutes les 60 secondes. Il accepte uniquement les messag
 
 Le premier envoi crée le fil Gmail et enregistre son `gmail_thread_id`. Les suivants réutilisent ce fil. Ne passez que les pièces jointes explicitement citées dans la réponse finale. Une pièce absente est signalée dans le mail sans bloquer l'envoi.
 
+Pour une réponse produite automatiquement depuis Gmail, Codex doit lister les fichiers à envoyer sous une section `## Pièces jointes`, avec un lien Markdown local par fichier. Le bridge ignore les liens placés ailleurs dans la réponse et les URL distantes, puis joint les chemins locaux de cette section. Cette convention évite d'envoyer par mégarde un fichier seulement cité comme référence.
+
 Un mail auquel l'utilisateur doit pouvoir répondre doit toujours passer par cette commande ou par le skill `gmail-codex-report`. Un envoi direct avec le connecteur Gmail ne crée aucune association avec la conversation Codex. Le bridge ne pourra donc pas savoir quelle conversation reprendre.
 
 ## Traitement des réponses Gmail

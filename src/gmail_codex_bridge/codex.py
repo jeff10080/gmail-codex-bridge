@@ -3,12 +3,56 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import unquote, urlparse
 
 from .models import CodexResult
+
+
+_ATTACHMENT_HEADING_RE = re.compile(
+    r"^\s{0,3}#{1,6}\s+(?:pi[eè]ces?\s+jointes?|attachments?)\s*:?[ \t]*$",
+    re.IGNORECASE,
+)
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)")
+
+
+def extract_explicit_attachments(response: str, working_directory: str | None) -> tuple[Path, ...]:
+    """Extract local file links listed under an explicit attachment heading."""
+    candidates: list[Path] = []
+    in_attachment_section = False
+    base = Path(working_directory) if working_directory else Path.cwd()
+
+    for line in response.splitlines():
+        if _ATTACHMENT_HEADING_RE.match(line):
+            in_attachment_section = True
+            continue
+        if in_attachment_section and re.match(r"^\s{0,3}#{1,6}\s+", line):
+            break
+        if not in_attachment_section:
+            continue
+        for match in _MARKDOWN_LINK_RE.finditer(line):
+            target = unquote(match.group(1) or match.group(2))
+            parsed = urlparse(target)
+            if parsed.scheme and parsed.scheme.casefold() not in {"file"}:
+                # urlparse treats a Windows drive letter as a scheme.
+                if not re.match(r"^[A-Za-z]:[\\/]", target):
+                    continue
+            if parsed.scheme.casefold() == "file":
+                target = unquote(parsed.path)
+                if parsed.netloc:
+                    target = f"//{parsed.netloc}{target}"
+                if re.match(r"^/[A-Za-z]:/", target):
+                    target = target[1:]
+            path = Path(target)
+            if not path.is_absolute():
+                path = base / path
+            candidates.append(path)
+
+    return tuple(dict.fromkeys(candidates))
 
 
 class CodexClient(Protocol):
@@ -127,7 +171,11 @@ class NodeCodexClient:
             raise RuntimeError(
                 f"Codex runner exit={proc.returncode}: {decoded_stderr[-1000:]}"
             )
-        return CodexResult(data["finalResponse"], thread_id=data.get("threadId"))
+        final_response = data["finalResponse"]
+        attachments = extract_explicit_attachments(
+            final_response, working_directory or self.working_directory
+        )
+        return CodexResult(final_response, attachments, data.get("threadId"))
 
     async def start(
         self,

@@ -1,6 +1,7 @@
+import email
 from email.message import EmailMessage
 
-from gmail_codex_bridge.gmail import GoogleGmailClient, _b64, extract_latest_reply
+from gmail_codex_bridge.gmail import GoogleGmailClient, _b64, _unb64, extract_latest_reply
 
 
 class Request:
@@ -56,10 +57,15 @@ def test_mime_parse_and_threaded_send(tmp_path):
         recipient="user@example.com",
         subject="Report",
         body="answer",
+        attachments=incoming.attachments,
         thread_id="g1",
         in_reply_to="<m1@gmail>",
     )
     assert messages.last_send["threadId"] == "g1"
+    sent = email.message_from_bytes(_unb64(messages.last_send["raw"]))
+    attachment = next(part for part in sent.walk() if part.get_content_disposition() == "attachment")
+    assert attachment.get_filename() == "result.bin"
+    assert attachment.get_payload(decode=True) == b"data"
 
 
 def test_extract_latest_reply_from_french_gmail_quote():
