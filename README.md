@@ -1,90 +1,228 @@
 # Gmail Codex Bridge
 
-## Format des mails sortants
+Gmail Codex Bridge connects a Gmail thread to a Codex task on Windows. You can publish a report from Codex, reply to it by email, and continue the same task without copying messages between applications.
 
-Les mails sortants sont envoyes en multipart avec une partie `text/html` rendue depuis le Markdown du rapport et une partie `text/plain` de secours. Les clients qui affichent le HTML profitent de la mise en forme; les autres conservent un contenu lisible.
+The bridge runs locally. It polls Gmail, accepts mail from one configured sender, and talks to the `codex app-server` process bundled with Codex Desktop. Empty polls do not start Codex or make a model request.
 
-Service local Windows reliant un fil Gmail à une conversation Codex, sans appel de modèle lors des scans vides.
+> [!IMPORTANT]
+> This project gives an approved email sender access to Codex in the configured project directories. It is intended for a trusted, single-user setup. Review the [security model](#security-model) before running it.
 
-## Etat
+## How it works
 
-La version locale fonctionne avec Gmail et le serveur local de Codex (`codex app-server`). Le consentement OAuth Gmail initial et l'installation de la tâche planifiée Windows restent interactifs.
+```mermaid
+flowchart LR
+    A["Codex task"] -->|"publish"| B["Gmail thread"]
+    B -->|"email reply"| C["Local bridge"]
+    C -->|"thread/resume and turn/start"| D["Codex app-server"]
+    D -->|"final response"| C
+    C -->|"threaded reply"| B
+```
 
-## Installation rapide
+Each Gmail thread maps to one Codex task. The bridge stores that route in SQLite and resumes the same task when a new reply arrives. A new email sent directly to the bridge can also start a named Codex task in a configured project.
 
-Prérequis : Python 3.11+, Node.js 18+, Codex Desktop installé et connecté (ou un exécutable `codex` compatible dans `PATH`, avec la commande `app-server`), projet Google Cloud avec Gmail API active et identifiants OAuth « application de bureau ». Le flux a été validé avec Codex CLI 0.144.3 ; `app-server` restant expérimental, une mise à jour future de Codex doit être suivie du test court décrit ci-dessous.
+Outgoing messages contain both HTML and plain-text parts. The HTML is rendered from the Markdown report, while the plain-text version remains available for clients that do not display HTML.
+
+## Main features
+
+- Two-way routing between Gmail threads and Codex tasks
+- New Codex tasks created from incoming email
+- Project selection through Gmail plus-address aliases
+- Named tasks that remain visible in Codex Desktop
+- FIFO processing within each task and configurable parallelism across tasks
+- Explicit attachment handling for incoming and outgoing messages
+- SQLite-backed deduplication, quarantine, and delivery state
+- DPAPI protection for the Gmail OAuth token
+- Local storage for configuration, logs, attachments, and routing data
+
+## Requirements
+
+- Windows 10 or 11
+- Python 3.11 or later
+- Node.js 18 or later
+- Codex Desktop installed and signed in, or a compatible `codex` executable in `PATH`
+- A Google Cloud project with the Gmail API enabled
+- OAuth credentials for a desktop application
+
+The bridge uses the experimental `codex app-server` interface. The current workflow was tested with Codex CLI 0.144.3. After updating Codex, run the checks in [Testing](#testing) before restarting the service.
+
+## Quick start
+
+Clone the repository and install it from PowerShell:
 
 ```powershell
+git clone https://github.com/jeff10080/gmail-codex-bridge.git
+Set-Location gmail-codex-bridge
 .\scripts\install.ps1
-Copy-Item config.example.toml "$env:LOCALAPPDATA\CodexGmailBridge\config.toml"
-# Placer credentials.json dans %LOCALAPPDATA%\CodexGmailBridge, puis :
+```
+
+The installer creates a virtual environment, installs the project and its development dependencies, and copies the example configuration to:
+
+```text
+%LOCALAPPDATA%\CodexGmailBridge\config.toml
+```
+
+Next:
+
+1. Create OAuth desktop credentials in Google Cloud and enable the Gmail API.
+2. Save the downloaded file as `%LOCALAPPDATA%\CodexGmailBridge\credentials.json`.
+3. Edit `%LOCALAPPDATA%\CodexGmailBridge\config.toml`.
+4. Authorize the Gmail account.
+5. Run the bridge in the foreground for the first test.
+
+```powershell
 .\.venv\Scripts\gmail-codex-bridge.exe auth
+.\.venv\Scripts\gmail-codex-bridge.exe run
+```
+
+The authorization command opens a browser for Google consent. To switch accounts later, run:
+
+```powershell
+.\.venv\Scripts\gmail-codex-bridge.exe auth --reauthorize
+```
+
+The bridge requests the `gmail.modify` scope. It does not request the broader `mail.google.com` scope.
+
+## Configuration
+
+The generated configuration starts from [config.example.toml](config.example.toml):
+
+```toml
+poll_interval_seconds = 60
+allowed_sender = "user@example.com"
+recipient = "user@example.com"
+gmail_account = "bridge@example.com"
+max_parallel_threads = 4
+gmail_query = "in:inbox from:user@example.com"
+codex_working_directory = "C:\\path\\to\\git-repository"
+default_project = "home"
+log_level = "INFO"
+
+[projects]
+home = "C:\\path\\to\\default-project"
+second-project = "C:\\path\\to\\second-project"
+```
+
+The account fields have separate roles:
+
+| Setting | Purpose |
+| --- | --- |
+| `gmail_account` | Gmail account authenticated through OAuth and monitored by the bridge |
+| `allowed_sender` | Exact sender address allowed to submit messages |
+| `recipient` | Address that receives reports and Codex replies |
+| `gmail_query` | Gmail search query used for polling |
+
+`default_project` must name an entry in `[projects]`. `codex_working_directory` is a fallback for older routes that do not have a stored project.
+
+## Publish a report
+
+Use the CLI to send the first report from an existing Codex task:
+
+```powershell
+.\.venv\Scripts\gmail-codex-bridge.exe publish `
+  --codex-thread-id THREAD_ID `
+  --subject "Codex report" `
+  --body-file .\report.md `
+  --attachment .\result.pdf
+```
+
+The first message creates a Gmail thread and records its route. Later calls with the same Codex task ID reuse that thread. Repeat `--attachment` to send more than one file.
+
+If a requested attachment is missing, the bridge lists the missing path in the email and sends the rest of the report. It does not silently substitute another file.
+
+Any email that should support replies must use this command or the included `gmail-codex-report` skill. Sending the same content through a generic Gmail client does not create the route needed to resume the Codex task.
+
+## Reply from Gmail
+
+Reply normally in the Gmail thread. The bridge removes quoted Gmail or Outlook history and passes only the new reply text to Codex. It does not add a wrapper, technical instruction, or copied thread history.
+
+The Gmail thread ID is the primary route. Each outgoing message also includes a `CX-XXXXXX` routing code. If Gmail places a reply in a new thread, the code lets the bridge recover the existing route and release a matching quarantined message.
+
+The bridge calls `thread/resume` followed by `turn/start`, so the reply becomes a real user message in the original Codex task. Do not forward the reply through another Codex task or an inter-task messaging tool.
+
+## Start a task by email
+
+Send a new email to the bridge account to create a Codex task. The recipient address selects the working directory:
+
+- `bridge@example.com` uses `default_project`.
+- `bridge+second-project@example.com` uses the matching key in `[projects]`.
+
+Gmail delivers plus-address aliases to the same mailbox. Once the task is created, the bridge stores its project and route in SQLite. Later replies continue in that task even if the project name is no longer present in the email body.
+
+The email subject becomes the Codex task name. If the subject is empty, the bridge uses `Conversation Gmail`.
+
+An unknown alias is quarantined and never starts Codex. Keep project keys simple and stable, for example `home`, `analysis-2026`, or `no-project`.
+
+## Attachments in Codex responses
+
+When Codex answers an email and needs to return local files, its final response must contain an `## Attachments` section with one explicit local Markdown link per file:
+
+```markdown
+## Attachments
+
+- [Analysis report](C:/path/to/report.pdf)
+- [Results](C:/path/to/results.csv)
+```
+
+Only local links under that heading become email attachments. Links elsewhere in the response and remote URLs are ignored. This rule prevents a file mentioned as a reference from being sent by accident.
+
+Incoming Gmail attachments are saved under `%LOCALAPPDATA%\CodexGmailBridge\attachments`.
+
+## Run in the background
+
+After the foreground test succeeds, start the bridge without a visible console window:
+
+```powershell
 .\scripts\start.ps1
 ```
 
-Le service scrute Gmail toutes les 60 secondes. Il accepte uniquement les messages provenant exactement de l'adresse autorisée. Les données, journaux, jetons et pièces jointes restent sous `%LOCALAPPDATA%\CodexGmailBridge`.
-
-## Publier un premier rapport
+Stop it with:
 
 ```powershell
-.\.venv\Scripts\gmail-codex-bridge.exe publish --codex-thread-id THREAD_ID --subject "Rapport Codex" --body-file rapport.md --attachment resultat.pdf
+.\scripts\stop.ps1
 ```
 
-Le premier envoi crée le fil Gmail et enregistre son `gmail_thread_id`. Les suivants réutilisent ce fil. Ne passez que les pièces jointes explicitement citées dans la réponse finale. Une pièce absente est signalée dans le mail sans bloquer l'envoi.
+The start and stop scripts also work with an existing Windows scheduled task named `Codex Gmail Bridge`. Scheduled-task creation is machine-specific and is not included in the public repository.
 
-Pour une réponse produite automatiquement depuis Gmail, Codex doit lister les fichiers à envoyer sous une section `## Pièces jointes`, avec un lien Markdown local par fichier. Le bridge ignore les liens placés ailleurs dans la réponse et les URL distantes, puis joint les chemins locaux de cette section. Cette convention évite d'envoyer par mégarde un fichier seulement cité comme référence.
+To unregister that task while keeping local data:
 
-Un mail auquel l'utilisateur doit pouvoir répondre doit toujours passer par cette commande ou par le skill `gmail-codex-report`. Un envoi direct avec le connecteur Gmail ne crée aucune association avec la conversation Codex. Le bridge ne pourra donc pas savoir quelle conversation reprendre.
-
-## Traitement des réponses Gmail
-
-Le bridge extrait seulement le nouveau texte écrit au-dessus de l'historique cité par Gmail ou Outlook. Ce texte est transmis tel quel à Codex par `app-server`. Aucun préfixe du type « réponse reçue par email », aucune consigne technique et aucun historique du fil ne sont ajoutés à la conversation.
-
-Le `gmail_thread_id` reste la route principale. Chaque mail contient aussi un code `CX-XXXXXX`. Si Gmail place une réponse dans un nouveau fil, ce code permet de retrouver la route et de récupérer un message déjà mis en quarantaine. Les mails sortants possèdent leur propre en-tête `Message-ID` afin de rendre le suivi du fil plus fiable.
-
-Il ne faut pas réinjecter manuellement une réponse avec un outil d'envoi entre conversations Codex. L'application l'afficherait comme une délégation provenant d'une autre tâche. Le service utilise directement `thread/resume` puis `turn/start`, ce qui crée un véritable message utilisateur contenant uniquement le corps nettoyé du mail.
-
-## Commencer une conversation depuis Gmail
-
-Un nouveau fil envoyé à l'adresse du bridge crée une nouvelle tâche Codex. Le projet est choisi par l'adresse destinataire, à partir de `gmail_account` et du registre `[projects]` :
-
-- l'adresse définie par `gmail_account` utilise `default_project` ;
-- l'adresse avec un suffixe `+alias` utilise le projet portant cet alias dans `[projects]`.
-
-Gmail remet les adresses avec suffixe `+...` dans la même boîte. Chaque fil Gmail correspond à une seule tâche Codex. Une fois la tâche créée, sa route et son projet sont conservés dans SQLite : toutes les réponses suivantes reprennent cette tâche, même si le corps du mail ne mentionne plus le projet.
-
-La nouvelle tâche est créée dans le stockage Codex utilisé par l'application, puis nommée d'après le sujet du mail (ou `Conversation Gmail` si le sujet est vide). Elle apparaît ainsi dans la liste des tâches de Codex Desktop et peut être ouverte puis poursuivie depuis l'application comme une tâche ordinaire.
-
-Un alias absent de `[projects]` est mis en quarantaine et ne lance pas Codex. Cela évite qu'un message soit exécuté dans le mauvais dépôt. Les clés de projet doivent être simples et stables, par exemple `mon-projet`, `analyse-2026` ou `sans-projet`.
-
-```toml
-default_project = "projet-principal"
-
-[projects]
-projet-principal = "C:\\chemin\\vers\\projet-principal"
-second-projet = "C:\\chemin\\vers\\second-projet"
+```powershell
+.\scripts\uninstall.ps1
 ```
 
-## Affichage dans Codex sous Windows
+To remove the task and all private bridge data, including the database, OAuth token, logs, and downloaded attachments, use the explicit destructive option:
 
-Le bridge passe par le protocole `app-server` du CLI fourni avec Codex Desktop. Contrairement à l'ancien runner `@openai/codex-sdk` fondé sur `codex exec`, une conversation commencée par email est créée comme une tâche nommée et visible dans l'application. Une réponse ultérieure reprend le même identifiant de tâche.
+```powershell
+.\scripts\uninstall.ps1 -DeletePrivateData
+```
 
-Le bridge lance un processus `app-server` local pour chaque tour puis le ferme lorsque la réponse finale est disponible. Il ne modifie aucun index interne de Codex et ne pilote pas l'interface graphique. Si une tâche déjà ouverte ne montre pas immédiatement le dernier tour, la rouvrir suffit à relire l'état persistant.
+PowerShell asks for confirmation before either action.
 
-Le runner Node utilise uniquement la bibliothèque standard de Node.js : le projet n'a plus de dépendance npm à `@openai/codex-sdk` et l'installation ne lance plus `npm install`.
+## Delivery and recovery behavior
 
-## Fonctionnement et garanties
+- Gmail message IDs provide ingestion idempotency.
+- SQLite preserves a FIFO queue for each Codex task.
+- Different tasks can run concurrently up to `max_parallel_threads`.
+- Jobs interrupted while running return to the queue when the service restarts.
+- Messages without a known route or configured project remain quarantined.
+- A send that fails after delivery may have occurred is marked `uncertain` and is not retried automatically. This avoids duplicate email.
 
-- SQLite assure le routage, la file FIFO, la quarantaine et l'idempotence par identifiant Gmail.
-- Un seul tour est exécuté à la fois par conversation. Des conversations différentes peuvent progresser en parallèle.
-- Un message sans route connue crée une tâche seulement si son adresse correspond à un projet configuré ; sinon il est mis en quarantaine.
-- Après une coupure, la requête Gmail retrouve les messages non traités, puis SQLite les déduplique.
-- Un envoi dont l'issue est incertaine passe à l'état `uncertain` et n'est jamais retenté automatiquement.
-- Les journaux contiennent uniquement les identifiants, les états et les erreurs, jamais le corps complet des emails.
+## Security model
 
-Voir [docs/INSTALLATION.md](docs/INSTALLATION.md) et [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The bridge is designed for one trusted sender and one local Windows account.
 
-## Tests
+- The sender address must match `allowed_sender` exactly.
+- New tasks can run only in directories listed under `[projects]`.
+- OAuth authorization must match `gmail_account`.
+- The OAuth token is encrypted with Windows DPAPI for the current user and machine.
+- Private state stays outside the repository under `%LOCALAPPDATA%\CodexGmailBridge`.
+- Logs contain identifiers, states, and errors, but not complete email bodies.
+- Email bodies and routing records are stored in the local SQLite database.
+
+Email sender checks are not a substitute for a multi-user authorization system. Do not expose this service to untrusted senders or configure project directories that contain data the approved sender should not access.
+
+## Testing
+
+The automated tests use local fakes and do not connect to Gmail or Codex:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
@@ -92,4 +230,13 @@ node --check scripts\codex-runner.mjs
 codex app-server --help
 ```
 
-Aucun test n'accède à Gmail ni à Codex.
+Run all three checks after changing the bridge or updating Codex.
+
+## Documentation
+
+- [Windows installation guide](docs/INSTALLATION.md)
+- [Architecture notes](docs/ARCHITECTURE.md)
+
+## License
+
+No license file is currently included. Treat the repository as all rights reserved unless the owner adds a license.
